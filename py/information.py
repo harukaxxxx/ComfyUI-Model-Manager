@@ -540,11 +540,12 @@ class Information:
                         utils.print_info(f"Searching model info by hash {hash_value}")
                         model_info = CivitaiModelSearcher().search_by_hash(hash_value)
 
-                        preview_url_list = model_info.get("preview", [])
-                        preview_image_url = preview_url_list[0] if preview_url_list else None
-                        if preview_image_url:
-                            utils.print_debug(f"Save preview image to {abs_image_path}")
-                            utils.save_model_preview_image(abs_model_path, preview_image_url)
+                        if not has_preview:
+                            preview_url_list = model_info.get("preview", [])
+                            preview_image_url = preview_url_list[0] if preview_url_list else None
+                            if preview_image_url:
+                                utils.print_debug(f"Save preview image to {abs_image_path}")
+                                utils.save_model_preview_image(abs_model_path, preview_image_url)
 
                         description = model_info.get("description", None)
                         if description:
