@@ -69,8 +69,12 @@ class CivitaiModelSearcher(ModelSearcher):
         models: list[dict] = []
 
         for version in model_versions:
-            model_files: list[dict] = version.get("files", [])
-            model_files = utils.filter_with(model_files, {"type": "Model"})
+            version_files: list[dict] = version.get("files", [])
+            model_files = utils.filter_with(version_files, {"type": "Model"})
+            # issue: https://github.com/hayden-fr/ComfyUI-Model-Manager/issues/188
+            # Some Embeddings do not have Model file, but Negative
+            # Make sure there are at least downloadable files
+            model_files = version_files if len(model_files) == 0 else model_files
 
             shortname = version.get("name", None) if len(model_files) > 0 else None
 
@@ -108,7 +112,7 @@ class CivitaiModelSearcher(ModelSearcher):
                 description_parts.append("")
 
                 model = {
-                    "id": file.get("id"),
+                    "id": version.get("id"),
                     "shortname": shortname or basename,
                     "basename": basename,
                     "extension": extension,
@@ -122,6 +126,7 @@ class CivitaiModelSearcher(ModelSearcher):
                     "downloadPlatform": "civitai",
                     "downloadUrl": file.get("downloadUrl"),
                     "hashes": file.get("hashes"),
+                    "files": version_files if len(version_files) > 1 else None,
                 }
                 models.append(model)
 
@@ -350,22 +355,16 @@ class Information:
         @routes.get("/model-manager/preview/{type}/{index}/{filename:.*}")
         async def read_model_preview(request):
             """
-            Get the file stream of the specified image.
+            Get the file stream of the specified preview
             If the file does not exist, no-preview.png is returned.
 
             :param type: The type of the model. eg.checkpoints, loras, vae, etc.
             :param index: The index of the model folders.
-            :param filename: The filename of the image.
+            :param filename: The filename of the preview.
             """
             model_type = request.match_info.get("type", None)
             index = int(request.match_info.get("index", None))
             filename = request.match_info.get("filename", None)
-
-            content_type = utils.resolve_file_content_type(filename)
-
-            if content_type == "video":
-                abs_path = utils.get_full_path(model_type, index, filename)
-                return web.FileResponse(abs_path)
 
             extension_uri = config.extension_uri
 
@@ -383,8 +382,16 @@ class Information:
             if not os.path.isfile(abs_path):
                 abs_path = utils.join_path(extension_uri, "assets", "no-preview.png")
 
-            image_data = self.get_image_preview_data(abs_path)
-            return web.Response(body=image_data.getvalue(), content_type="image/webp")
+            # Determine content type from the actual file
+            content_type = utils.resolve_file_content_type(abs_path)
+
+            if content_type == "video":
+                # Serve video files directly
+                return web.FileResponse(abs_path)
+            else:
+                # Serve image files (WebP or fallback images)
+                image_data = self.get_image_preview_data(abs_path)
+                return web.Response(body=image_data.getvalue(), content_type="image/webp")
 
         @routes.get("/model-manager/preview/download/{filename}")
         async def read_download_preview(request):

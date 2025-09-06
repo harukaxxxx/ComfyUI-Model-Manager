@@ -6,7 +6,7 @@ import { defineStore } from 'hooks/store'
 import { useToast } from 'hooks/toast'
 import { castArray, cloneDeep } from 'lodash'
 import { TreeNode } from 'primevue/treenode'
-import { app } from 'scripts/comfyAPI'
+import { api, app } from 'scripts/comfyAPI'
 import { BaseModel, Model, SelectEvent, WithResolved } from 'types/typings'
 import { bytesToSize, formatDate, previewUrlToFile } from 'utils/common'
 import { ModelGrid } from 'utils/legacy'
@@ -27,16 +27,18 @@ import {
 import { useI18n } from 'vue-i18n'
 import { configSetting } from './config'
 
+const systemStat = ref()
+
 type ModelFolder = Record<string, string[]>
 
 const modelFolderProvideKey = Symbol('modelFolder') as InjectionKey<
   Ref<ModelFolder>
 >
 
-export const genModelFullName = (model: BaseModel) => {
+export const genModelFullName = (model: BaseModel, splitter = '/') => {
   return [model.subFolder, `${model.basename}${model.extension}`]
     .filter(Boolean)
-    .join('/')
+    .join(splitter)
 }
 
 export const genModelUrl = (model: BaseModel) => {
@@ -233,6 +235,12 @@ export const useModels = defineStore('models', (store) => {
     const prefixPath = folders.value[model.type]?.[model.pathIndex]
     return [prefixPath, fullname].filter(Boolean).join('/')
   }
+
+  onMounted(() => {
+    api.getSystemStats().then((res) => {
+      systemStat.value = res
+    })
+  })
 
   return {
     initialized: initialized,
@@ -545,9 +553,11 @@ export const useModelPreviewEditor = (formInstance: ModelFormInstance) => {
    * Local file url
    */
   const localContent = ref<string>()
+  const localContentType = ref<string>()
   const updateLocalContent = async (event: SelectEvent) => {
     const { files } = event
     localContent.value = files[0].objectURL
+    localContentType.value = files[0].type
   }
 
   /**
@@ -579,16 +589,13 @@ export const useModelPreviewEditor = (formInstance: ModelFormInstance) => {
     return content
   })
 
-  const previewType = computed(() => {
-    return model.value.previewType
-  })
-
   onMounted(() => {
     registerReset(() => {
       currentType.value = 'default'
       defaultContentPage.value = 0
       networkContent.value = undefined
       localContent.value = undefined
+      localContentType.value = undefined
     })
 
     registerSubmit((data) => {
@@ -598,7 +605,6 @@ export const useModelPreviewEditor = (formInstance: ModelFormInstance) => {
 
   const result = {
     preview,
-    previewType,
     typeOptions,
     currentType,
     // default value
@@ -608,6 +614,7 @@ export const useModelPreviewEditor = (formInstance: ModelFormInstance) => {
     networkContent,
     // local file
     localContent,
+    localContentType,
     updateLocalContent,
     // no preview
     noPreviewContent,
@@ -717,11 +724,12 @@ export const useModelNodeAction = () => {
       // Use the legacy method instead
       const removeEmbeddingExtension = true
       const strictDragToAdd = false
+      const splitter = systemStat.value?.system.os === 'nt' ? '\\' : '/'
 
       ModelGrid.dragAddModel(
         event,
         model.type,
-        genModelFullName(model),
+        genModelFullName(model, splitter),
         removeEmbeddingExtension,
         strictDragToAdd,
       )

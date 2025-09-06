@@ -1,9 +1,18 @@
 declare namespace ComfyAPI {
   namespace api {
-    class ComfyApi {
+    class ComfyApiEvent {
+      getSystemStats: () => Promise<any>
+    }
+
+    class ComfyApi extends ComfyApiEvent {
       socket: WebSocket
       fetchApi: (route: string, options?: RequestInit) => Promise<Response>
       addEventListener: (
+        type: string,
+        callback: (event: CustomEvent) => void,
+        options?: AddEventListenerOptions,
+      ) => void
+      removeEventListener: (
         type: string,
         callback: (event: CustomEvent) => void,
         options?: AddEventListenerOptions,

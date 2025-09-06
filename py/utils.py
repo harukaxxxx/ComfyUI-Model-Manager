@@ -17,6 +17,25 @@ from aiohttp import web
 from typing import Any, Optional
 from . import config
 
+# Media file extensions
+VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.m4v', '.ogv']
+IMAGE_EXTENSIONS = ['.webp', '.png', '.jpg', '.jpeg', '.gif', '.bmp']
+
+# Preview extensions in priority order (videos first, then images)
+PREVIEW_EXTENSIONS = ['.webm', '.mp4', '.webp', '.png', '.jpg', '.jpeg', '.gif', '.bmp']
+
+# Content type mappings
+VIDEO_CONTENT_TYPE_MAP = {
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'video/quicktime': '.mov',
+    'video/x-msvideo': '.avi',
+    'video/x-matroska': '.mkv',
+    'video/x-flv': '.flv',
+    'video/x-ms-wmv': '.wmv',
+    'video/ogg': '.ogv',
+}
+
 
 def print_info(msg, *args, **kwargs):
     logging.info(f"[{config.extension_tag}] {msg}", *args, **kwargs)
@@ -27,7 +46,7 @@ def print_warning(msg, *args, **kwargs):
 
 
 def print_error(msg, *args, **kwargs):
-    logging.error(f"[{config.extension_tag}] {msg}", *args, **kwargs)
+    logging.error(f"[{config.extension_tag}][ERROR] {msg}", *args, **kwargs)
     logging.debug(traceback.format_exc())
 
 
@@ -252,95 +271,145 @@ def get_model_metadata(filename: str):
         return {}
 
 
-def get_model_all_images(model_path: str):
+def _check_preview_variants(base_dirname: str, basename: str, extensions: list[str]) -> list[str]:
+    """Check for preview files with given extensions and return found files"""
+    found = []
+    for ext in extensions:
+        # Direct match (basename.ext)
+        preview_file = f"{basename}{ext}"
+        if os.path.isfile(join_path(base_dirname, preview_file)):
+            found.append(preview_file)
+        
+        # Preview variant (basename.preview.ext)
+        preview_file = f"{basename}.preview{ext}"
+        if os.path.isfile(join_path(base_dirname, preview_file)):
+            found.append(preview_file)
+    return found
+
+
+def _get_preview_path(model_path: str, extension: str) -> str:
+    """Generate preview file path with given extension"""
+    basename = os.path.splitext(model_path)[0]
+    return f"{basename}{extension}"
+
+
+def get_model_all_previews(model_path: str) -> list[str]:
+    """Get all preview files for a model"""
     base_dirname = os.path.dirname(model_path)
-    files = search_files(base_dirname)
-    files = folder_paths.filter_files_content_types(files, ["image"])
-
     basename = os.path.splitext(os.path.basename(model_path))[0]
-    output: list[str] = []
-    for file in files:
-        file_basename = os.path.splitext(file)[0]
-        if file_basename == basename:
-            output.append(file)
-        if file_basename == f"{basename}.preview":
-            output.append(file)
-    return output
+    return _check_preview_variants(base_dirname, basename, PREVIEW_EXTENSIONS)
 
 
-def get_model_preview_name(model_path: str):
-    images = get_model_all_images(model_path)
-    basename = os.path.splitext(os.path.basename(model_path))[0]
-
-    for image in images:
-        image_name = os.path.splitext(image)[0]
-        image_ext = os.path.splitext(image)[1]
-        if image_name == basename and image_ext.lower() == ".webp":
-            return image
-
-    return images[0] if len(images) > 0 else "no-preview.png"
-
-
-def get_model_all_videos(model_path: str):
+def get_model_preview_name(model_path: str) -> str:
+    """Get the first available preview file or 'no-preview.png' if none found"""
     base_dirname = os.path.dirname(model_path)
-    files = search_files(base_dirname)
-    files = folder_paths.filter_files_content_types(files, ["video"])
-
     basename = os.path.splitext(os.path.basename(model_path))[0]
-    output: list[str] = []
-    for file in files:
-        file_basename = os.path.splitext(file)[0]
-        if file_basename == basename:
-            output.append(file)
-        if file_basename == f"{basename}.preview":
-            output.append(file)
-    return output
+    
+    for ext in PREVIEW_EXTENSIONS:
+        # Check direct match first
+        preview_name = f"{basename}{ext}"
+        if os.path.isfile(join_path(base_dirname, preview_name)):
+            return preview_name
+        
+        # Check preview variant
+        preview_name = f"{basename}.preview{ext}"
+        if os.path.isfile(join_path(base_dirname, preview_name)):
+            return preview_name
+    
+    return "no-preview.png"
 
 
 from PIL import Image
 from io import BytesIO
 
 
-def remove_model_preview_image(model_path: str):
-    basename = os.path.splitext(model_path)[0]
-    preview_path = f"{basename}.webp"
-    if os.path.exists(preview_path):
-        os.remove(preview_path)
+def remove_model_preview(model_path: str):
+    """Remove all preview files for a model"""
+    base_dirname = os.path.dirname(model_path)
+    basename = os.path.splitext(os.path.basename(model_path))[0]
+    
+    previews = _check_preview_variants(base_dirname, basename, PREVIEW_EXTENSIONS)
+    for preview in previews:
+        preview_path = join_path(base_dirname, preview)
+        if os.path.exists(preview_path):
+            os.remove(preview_path)
 
 
-def save_model_preview_image(model_path: str, image_file_or_url: Any, platform: Optional[str] = None):
-    basename = os.path.splitext(model_path)[0]
-    preview_path = f"{basename}.webp"
-    # Download image file if it is url
-    if type(image_file_or_url) is str:
-        image_url = image_file_or_url
+def save_model_preview(model_path: str, file_or_url: Any, platform: Optional[str] = None):
+    """Save a preview file for a model. Images -> WebP, videos -> original format"""
+    
+    # Download file if it is a URL
+    if type(file_or_url) is str:
+        url = file_or_url
 
         try:
-            image_response = requests.get(image_url)
-            image_response.raise_for_status()
-
-            image = Image.open(BytesIO(image_response.content))
-            image.save(preview_path, "WEBP")
+            response = requests.get(url)
+            response.raise_for_status()
+            
+            # Determine content type from response headers or URL extension
+            content_type = response.headers.get('content-type', '')
+            if not content_type:
+                # Fallback to URL extension detection
+                content_type = resolve_file_content_type(url) or ''
+            
+            content = response.content
+            
+            if content_type.startswith("video/"):
+                # Save video in original format
+                # Try to get extension from URL or content-type
+                ext = _get_video_extension_from_url(url) or _get_extension_from_content_type(content_type) or '.mp4'
+                preview_path = _get_preview_path(model_path, ext)
+                with open(preview_path, 'wb') as f:
+                    f.write(content)
+            else:
+                # Default to image processing for unknown or image types
+                preview_path = _get_preview_path(model_path, ".webp")
+                image = Image.open(BytesIO(content))
+                image.save(preview_path, "WEBP")
 
         except Exception as e:
-            print_error(f"Failed to download image: {e}")
+            print_error(f"Failed to download preview: {e}")
 
+    # Handle uploaded file
     else:
-        # Assert image as file
-        image_file = image_file_or_url
+        file_obj = file_or_url
 
-        if not isinstance(image_file, web.FileField):
-            raise RuntimeError("Invalid image file")
+        if not isinstance(file_obj, web.FileField):
+            raise RuntimeError("Invalid file")
 
-        content_type: str = image_file.content_type
-        if not content_type.startswith("image/"):
-            if platform == "huggingface":
-                # huggingface previewFile content_type='text/plain',  not startswith("image/")
-                return
-            else:
-                raise RuntimeError(f"FileTypeError: expected image, got {content_type}")
-        image = Image.open(image_file.file)
-        image.save(preview_path, "WEBP")
+        content_type: str = file_obj.content_type
+        filename: str = getattr(file_obj, 'filename', '')
+        
+        if content_type.startswith("video/"):
+            # Save video in original format for now, consider transcoding to webm to follow the pattern for images converting to webp
+            ext = os.path.splitext(filename.lower())[1] or '.mp4'
+            preview_path = _get_preview_path(model_path, ext)
+            file_obj.file.seek(0)
+            content = file_obj.file.read()
+            with open(preview_path, 'wb') as f:
+                f.write(content)
+        elif content_type.startswith("image/"):
+            # Convert image to webp
+            preview_path = _get_preview_path(model_path, ".webp")
+            image = Image.open(file_obj.file)
+            image.save(preview_path, "WEBP")
+        else:
+            raise RuntimeError(f"FileTypeError: expected image or video, got {content_type}")
+
+
+def _get_video_extension_from_url(url: str) -> Optional[str]:
+    """Extract video extension from URL."""
+    from urllib.parse import urlparse
+    path = urlparse(url).path.lower()
+    for ext in VIDEO_EXTENSIONS:
+        if path.endswith(ext):
+            return ext
+    return None
+
+
+def _get_extension_from_content_type(content_type: str) -> Optional[str]:
+    """Map content-type to file extension."""
+    return VIDEO_CONTENT_TYPE_MAP.get(content_type.lower())
 
 
 def get_model_all_descriptions(model_path: str):
@@ -398,7 +467,7 @@ def rename_model(model_path: str, new_model_path: str):
     shutil.move(model_path, new_model_path)
 
     # move preview
-    previews = get_model_all_images(model_path)
+    previews = get_model_all_previews(model_path)
     for preview in previews:
         preview_path = join_path(model_dirname, preview)
         preview_name = os.path.splitext(preview)[0]

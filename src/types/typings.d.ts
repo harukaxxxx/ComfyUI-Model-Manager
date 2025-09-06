@@ -11,7 +11,6 @@ export interface BaseModel {
   pathIndex: number
   isFolder: boolean
   preview: string | string[]
-  previewType: string
   description: string
   metadata: Record<string, string>
 }
@@ -22,11 +21,22 @@ export interface Model extends BaseModel {
   children?: Model[]
 }
 
+export interface VersionModelFile {
+  id: number
+  sizeKB: number
+  name: string
+  type: string
+  metadata: Record<string, string>
+  hashes: Record<string, string>
+  downloadUrl: string
+}
+
 export interface VersionModel extends BaseModel {
   shortname: string
   downloadPlatform: string
   downloadUrl: string
   hashes?: Record<string, string>
+  files?: VersionModelFile[]
 }
 
 export type WithResolved<T> = Omit<T, 'preview'> & {

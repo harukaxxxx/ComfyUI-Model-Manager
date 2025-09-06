@@ -131,22 +131,15 @@ class ModelManager:
             basename = os.path.splitext(filename)[0] if is_file else filename
             extension = os.path.splitext(filename)[1] if is_file else ""
 
-            if is_file and extension not in folder_paths.supported_pt_extensions:
+            model_preview = None
+            if is_file:
+                preview_name = utils.get_model_preview_name(entry.path)
+                preview_ext = f".{preview_name.split('.')[-1]}"
+                model_preview = f"/model-manager/preview/{folder}/{path_index}/{relative_path.replace(extension, preview_ext)}"
+
+            if not os.path.exists(entry.path):
+                utils.print_error(f"{entry.path} is not file or directory.")
                 return None
-
-            preview_type = "image"
-            preview_ext = ".webp"
-            preview_images = utils.get_model_all_images(entry.path)
-            if len(preview_images) > 0:
-                preview_type = "image"
-                preview_ext = ".webp"
-            else:
-                preview_videos = utils.get_model_all_videos(entry.path)
-                if len(preview_videos) > 0:
-                    preview_type = "video"
-                    preview_ext = f".{preview_videos[0].split('.')[-1]}"
-
-            model_preview = f"/model-manager/preview/{folder}/{path_index}/{relative_path.replace(extension, preview_ext)}"
 
             stat = entry.stat()
             return {
@@ -157,36 +150,45 @@ class ModelManager:
                 "extension": extension,
                 "pathIndex": path_index,
                 "sizeBytes": stat.st_size if is_file else 0,
-                "preview": model_preview if is_file else None,
-                "previewType": preview_type,
+                "preview": model_preview,
                 "createdAt": round(stat.st_ctime_ns / 1000000),
                 "updatedAt": round(stat.st_mtime_ns / 1000000),
             }
 
         def get_all_files_entry(directory: str):
             entries: list[os.DirEntry[str]] = []
+            if not os.path.exists(directory):
+                return []
             with os.scandir(directory) as it:
                 for entry in it:
-                    # Skip hidden files
-                    if not include_hidden_files:
-                        if entry.name.startswith("."):
-                            continue
-                    entries.append(entry)
-                    if entry.is_dir():
+                    if not include_hidden_files and entry.name.startswith("."):
+                        continue
+                    
+                    if entry.is_file():
+                        extension = os.path.splitext(entry.name)[1]
+                        if extension in folder_paths.supported_pt_extensions:
+                            entries.append(entry)
+                    else:
+                        entries.append(entry)
                         entries.extend(get_all_files_entry(entry.path))
             return entries
 
+        BATCH_SIZE = 200
+        MAX_WORKERS = min(4, os.cpu_count() or 1)
+        
         for path_index, base_path in enumerate(folders):
             if not os.path.exists(base_path):
                 continue
             file_entries = get_all_files_entry(base_path)
-            with ThreadPoolExecutor() as executor:
-                futures = {executor.submit(get_file_info, entry, base_path, path_index): entry for entry in file_entries}
-                for future in as_completed(futures):
-                    file_info = future.result()
-                    if file_info is None:
-                        continue
-                    result.append(file_info)
+            
+            for i in range(0, len(file_entries), BATCH_SIZE):
+                batch = file_entries[i:i + BATCH_SIZE]
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    futures = {executor.submit(get_file_info, entry, base_path, path_index): entry for entry in batch}
+                    for future in as_completed(futures):
+                        file_info = future.result()
+                        if file_info is not None:
+                            result.append(file_info)
 
         return result
 
@@ -211,10 +213,11 @@ class ModelManager:
 
         if "previewFile" in model_data:
             previewFile = model_data["previewFile"]
-            if type(previewFile) is str and previewFile == "undefined":
-                utils.remove_model_preview_image(model_path)
-            else:
-                utils.save_model_preview_image(model_path, previewFile)
+            # Always remove existing preview files first in case the file extension has changed
+            utils.remove_model_preview(model_path)
+            # Nothing else to do if the preview file was being removed
+            if not (type(previewFile) is str and previewFile == "undefined"):
+                utils.save_model_preview(model_path, previewFile)
 
         if "description" in model_data:
             description = model_data["description"]
@@ -236,7 +239,7 @@ class ModelManager:
         model_dirname = os.path.dirname(model_path)
         os.remove(model_path)
 
-        model_previews = utils.get_model_all_images(model_path)
+        model_previews = utils.get_model_all_previews(model_path)
         for preview in model_previews:
             os.remove(utils.join_path(model_dirname, preview))
 
